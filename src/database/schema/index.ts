@@ -24,6 +24,7 @@ export const userRoleEnum = pgEnum('user_role', [
   'nurse',
   'receptionist',
   'cashier',
+  'pharmacy_tech',
 ]);
 
 export const documentTypeEnum = pgEnum('document_type', ['DNI', 'CE', 'PASAPORTE', 'RUC']);

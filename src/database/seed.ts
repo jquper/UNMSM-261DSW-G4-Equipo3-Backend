@@ -7,7 +7,11 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 async function seed() {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  const useSSL = process.env.DATABASE_SSL === 'true';
+  const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: useSSL ? { rejectUnauthorized: false } : false,
+  });
   const db = drizzle(pool, { schema });
 
   console.log('🌱 Seeding database...');

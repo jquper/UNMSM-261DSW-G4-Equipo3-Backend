@@ -18,7 +18,7 @@ export const DATABASE_TOKEN = 'DATABASE';
           max: 20,
           idleTimeoutMillis: 30000,
           connectionTimeoutMillis: 2000,
-          ssl: config.get('NODE_ENV') === 'production' ? { rejectUnauthorized: false } : false,
+          ssl: config.get('DATABASE_SSL') === 'true' ? { rejectUnauthorized: false } : false,
         });
         return drizzle(pool, { schema });
       },
