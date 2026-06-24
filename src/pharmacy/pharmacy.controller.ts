@@ -38,17 +38,19 @@ export class PharmacyController {
   // ── Inventory ──────────────────────────────────────────────────────────────
 
   @Get('inventory')
-  @ApiOperation({ summary: 'Listar inventario de farmacia', description: 'Retorna todos los medicamentos en stock. Filtro opcional para bajo stock.' })
+  @ApiOperation({ summary: 'Listar inventario de farmacia', description: 'Retorna todos los medicamentos en stock. Filtro opcional para bajo stock o búsqueda por nombre.' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
   @ApiQuery({ name: 'lowStock', required: false, type: Boolean, description: 'true para mostrar solo items con stock bajo o agotado' })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Buscar por nombre comercial o genérico' })
   @ApiResponse({ status: 200, description: 'Lista paginada del inventario.' })
   findAllInventory(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
     @Query('lowStock', new DefaultValuePipe(false), ParseBoolPipe) lowStock: boolean,
+    @Query('search') search?: string,
   ) {
-    return this.pharmacyService.findAllInventory(page, Math.min(limit, 100), lowStock);
+    return this.pharmacyService.findAllInventory(page, Math.min(limit, 100), lowStock, search);
   }
 
   @Get('inventory/alerts')

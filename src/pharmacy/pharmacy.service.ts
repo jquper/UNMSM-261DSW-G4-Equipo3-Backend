@@ -4,7 +4,7 @@ import {
   BadRequestException,
   Inject,
 } from '@nestjs/common';
-import { eq, desc, and, count, sql, lt } from 'drizzle-orm';
+import { eq, desc, and, count, sql, lt, ilike, or } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DATABASE_TOKEN } from '../database/database.module';
 import {
@@ -31,11 +31,19 @@ export class PharmacyService {
 
   // ── Inventory ──────────────────────────────────────────────────────────────
 
-  async findAllInventory(page = 1, limit = 20, lowStock = false) {
+  async findAllInventory(page = 1, limit = 20, lowStock = false, search?: string) {
     const offset = (page - 1) * limit;
     const conditions: any[] = [eq(pharmacyInventory.isActive, true)];
     if (lowStock) {
       conditions.push(sql`${pharmacyInventory.stock} <= ${pharmacyInventory.minStock}`);
+    }
+    if (search) {
+      conditions.push(
+        or(
+          ilike(pharmacyInventory.medicationName, `%${search}%`),
+          ilike(pharmacyInventory.genericName, `%${search}%`),
+        ),
+      );
     }
     const where = and(...conditions);
 
