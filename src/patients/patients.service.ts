@@ -61,20 +61,25 @@ export class PatientsService {
     const existing = await this.findByDocument(dto.documentType, dto.documentNumber);
     if (existing) throw new ConflictException('Ya existe un paciente con ese documento');
 
-    const [patient] = await this.db
-      .insert(patients)
-      .values({
-        ...dto,
-        documentType: dto.documentType as any,
-        gender: dto.gender as any,
-        bloodType: dto.bloodType as any,
-      })
-      .returning();
+    return this.db.transaction(async (tx) => {
+      const [{ total }] = await tx.select({ total: count() }).from(patients);
+      const hcNumber = `HC-${String(Number(total) + 1).padStart(6, '0')}`;
 
-    // Create billing account automatically
-    await this.db.insert(billingAccounts).values({ patientId: patient.id });
+      const [patient] = await tx
+        .insert(patients)
+        .values({
+          ...dto,
+          hcNumber,
+          documentType: dto.documentType as any,
+          gender: dto.gender as any,
+          bloodType: dto.bloodType as any,
+        })
+        .returning();
 
-    return patient;
+      await tx.insert(billingAccounts).values({ patientId: patient.id });
+
+      return patient;
+    });
   }
 
   async update(id: string, dto: UpdatePatientDto) {

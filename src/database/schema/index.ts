@@ -177,6 +177,7 @@ export const patients = pgTable(
   'patients',
   {
     id: uuid('id').defaultRandom().primaryKey(),
+    hcNumber: varchar('hc_number', { length: 20 }).unique(),
     documentType: documentTypeEnum('document_type').notNull(),
     documentNumber: varchar('document_number', { length: 20 }).notNull(),
     firstName: varchar('first_name', { length: 100 }).notNull(),
@@ -199,6 +200,7 @@ export const patients = pgTable(
   (t) => ({
     documentIdx: uniqueIndex('patients_document_idx').on(t.documentType, t.documentNumber),
     nameIdx: index('patients_name_idx').on(t.lastName, t.firstName),
+    hcIdx: uniqueIndex('patients_hc_idx').on(t.hcNumber),
   }),
 );
 

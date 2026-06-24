@@ -1,10 +1,10 @@
-import { Injectable, NotFoundException, Inject } from '@nestjs/common';
-import { eq, desc, and, count, sql, sum } from 'drizzle-orm';
+import { Injectable, NotFoundException, BadRequestException, Inject } from '@nestjs/common';
+import { eq, desc, and, count, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DATABASE_TOKEN } from '../database/database.module';
 import { billingAccounts, billingTransactions, patients } from '../database/schema';
 import * as schema from '../database/schema';
-import { CreateTransactionDto, PayTransactionDto } from './dto/billing.dto';
+import { CreateTransactionDto, PayTransactionDto, PayAllDto } from './dto/billing.dto';
 
 @Injectable()
 export class BillingService {
@@ -89,6 +89,67 @@ export class BillingService {
 
     await this.recalculateBalance(transaction.patientId);
     return updated;
+  }
+
+  async payAll(patientId: string, dto: PayAllDto) {
+    const pending = await this.db
+      .select()
+      .from(billingTransactions)
+      .where(
+        and(
+          eq(billingTransactions.patientId, patientId),
+          eq(billingTransactions.status, 'pending'),
+        ),
+      );
+
+    if (pending.length === 0) {
+      throw new BadRequestException('No hay transacciones pendientes para este paciente');
+    }
+
+    const year = new Date().getFullYear();
+    const receiptNumber = dto.receiptNumber || `REC-${year}-${Date.now().toString().slice(-6)}`;
+    const now = new Date();
+
+    await this.db
+      .update(billingTransactions)
+      .set({ status: 'paid', paidAt: now, receiptNumber, updatedAt: now })
+      .where(
+        and(
+          eq(billingTransactions.patientId, patientId),
+          eq(billingTransactions.status, 'pending'),
+        ),
+      );
+
+    await this.recalculateBalance(patientId);
+    return this.getReceipt(receiptNumber);
+  }
+
+  async getReceipt(receiptNumber: string) {
+    const rows = await this.db
+      .select({
+        transaction: billingTransactions,
+        patient: {
+          id: patients.id,
+          firstName: patients.firstName,
+          lastName: patients.lastName,
+          documentNumber: patients.documentNumber,
+          phone: patients.phone,
+        },
+      })
+      .from(billingTransactions)
+      .innerJoin(patients, eq(billingTransactions.patientId, patients.id))
+      .where(eq(billingTransactions.receiptNumber, receiptNumber));
+
+    if (rows.length === 0) throw new NotFoundException('Comprobante no encontrado');
+
+    const total = rows.reduce((sum, r) => sum + parseFloat(r.transaction.amount), 0);
+    return {
+      receiptNumber,
+      patient: rows[0].patient,
+      items: rows.map((r) => r.transaction),
+      total: total.toFixed(2),
+      paidAt: rows[0].transaction.paidAt,
+    };
   }
 
   async getDebtors(page = 1, limit = 20) {

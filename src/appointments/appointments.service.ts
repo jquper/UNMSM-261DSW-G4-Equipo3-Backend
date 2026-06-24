@@ -1,15 +1,18 @@
 import { Injectable, NotFoundException, ConflictException, Inject } from '@nestjs/common';
-import { eq, desc, and, count, gte, lte, type SQL } from 'drizzle-orm';
+import { eq, desc, and, count, type SQL } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DATABASE_TOKEN } from '../database/database.module';
-import { appointments, patients, doctors, specialties, users } from '../database/schema';
+import { appointments, patients, doctors, specialties, billingAccounts } from '../database/schema';
 import * as schema from '../database/schema';
 import { CreateAppointmentDto, UpdateAppointmentDto } from './dto/appointment.dto';
+import { BillingService } from '../billing/billing.service';
+import { TransactionType } from '../billing/dto/billing.dto';
 
 @Injectable()
 export class AppointmentsService {
   constructor(
     @Inject(DATABASE_TOKEN) private readonly db: NodePgDatabase<typeof schema>,
+    private readonly billingService: BillingService,
   ) {}
 
   async findAll(page = 1, limit = 20, filters?: { doctorId?: string; patientId?: string; date?: string; status?: string }) {
@@ -64,7 +67,6 @@ export class AppointmentsService {
   }
 
   async create(dto: CreateAppointmentDto, createdBy: string) {
-    // Check for scheduling conflicts
     const [conflict] = await this.db
       .select({ id: appointments.id })
       .from(appointments)
@@ -80,23 +82,30 @@ export class AppointmentsService {
 
     if (conflict) throw new ConflictException('El médico ya tiene una cita en ese horario');
 
+    const [billingAccount] = await this.db
+      .select({ id: billingAccounts.id })
+      .from(billingAccounts)
+      .where(eq(billingAccounts.patientId, dto.patientId))
+      .limit(1);
+
+    if (!billingAccount) throw new NotFoundException('Cuenta de paciente no encontrada');
+
     const [appointment] = await this.db
       .insert(appointments)
       .values({ ...dto, status: 'scheduled', createdBy })
       .returning();
 
-    // Create billing charge
-    await this.db.insert(schema.billingTransactions).values({
-      accountId: await this.getAccountId(dto.patientId),
-      patientId: dto.patientId,
-      type: 'charge',
-      amount: dto.fee || '0',
-      description: `Consulta médica - Cita ${appointment.id.substring(0, 8)}`,
-      referenceType: 'appointment',
-      referenceId: appointment.id,
-      status: 'pending',
+    await this.billingService.createTransaction(
+      {
+        patientId: dto.patientId,
+        type: TransactionType.CHARGE,
+        amount: dto.fee || '0',
+        description: `Consulta médica - Cita ${appointment.id.substring(0, 8)}`,
+        referenceType: 'appointment',
+        referenceId: appointment.id,
+      },
       createdBy,
-    });
+    );
 
     return appointment;
   }
@@ -124,14 +133,5 @@ export class AppointmentsService {
       .innerJoin(patients, eq(appointments.patientId, patients.id))
       .where(and(eq(appointments.doctorId, doctorId), eq(appointments.appointmentDate, date)))
       .orderBy(appointments.appointmentTime);
-  }
-
-  private async getAccountId(patientId: string): Promise<string> {
-    const [account] = await this.db
-      .select({ id: schema.billingAccounts.id })
-      .from(schema.billingAccounts)
-      .where(eq(schema.billingAccounts.patientId, patientId))
-      .limit(1);
-    return account?.id || patientId;
   }
 }

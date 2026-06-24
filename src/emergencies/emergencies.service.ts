@@ -2,9 +2,13 @@ import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { eq, desc, and, count, gte, type SQL } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DATABASE_TOKEN } from '../database/database.module';
-import { emergencies, patients, doctors, users } from '../database/schema';
+import { emergencies, patients, doctors, users, tickets } from '../database/schema';
 import * as schema from '../database/schema';
 import { CreateEmergencyDto, UpdateEmergencyDto } from './dto/emergency.dto';
+
+const TRIAGE_PRIORITY: Record<number, string> = {
+  1: 'immediate', 2: 'very_urgent', 3: 'urgent', 4: 'normal', 5: 'non_urgent',
+};
 
 @Injectable()
 export class EmergenciesService {
@@ -55,12 +59,36 @@ export class EmergenciesService {
     return emergency;
   }
 
-  async create(dto: CreateEmergencyDto) {
+  async create(dto: CreateEmergencyDto, createdBy: string) {
+    let ticketId = dto.ticketId;
+
+    if (!ticketId) {
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const [{ total }] = await this.db
+        .select({ total: count() })
+        .from(tickets)
+        .where(and(eq(tickets.type, 'emergency'), gte(tickets.createdAt, new Date(new Date().setHours(0, 0, 0, 0)))));
+      const seq = String(Number(total) + 1).padStart(3, '0');
+
+      const [ticket] = await this.db
+        .insert(tickets)
+        .values({
+          ticketNumber: `E-${today}-${seq}`,
+          patientId: dto.patientId,
+          type: 'emergency',
+          priority: (TRIAGE_PRIORITY[dto.triageLevel] ?? 'urgent') as any,
+          createdBy,
+        })
+        .returning();
+
+      ticketId = ticket.id;
+    }
+
     const [emergency] = await this.db
       .insert(emergencies)
       .values({
         patientId: dto.patientId,
-        ticketId: dto.ticketId,
+        ticketId,
         doctorId: dto.doctorId,
         triageLevel: dto.triageLevel,
         chiefComplaint: dto.chiefComplaint,
