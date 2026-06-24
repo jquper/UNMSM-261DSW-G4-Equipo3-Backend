@@ -82,13 +82,11 @@ export class AppointmentsService {
 
     if (conflict) throw new ConflictException('El médico ya tiene una cita en ese horario');
 
-    const [billingAccount] = await this.db
-      .select({ id: billingAccounts.id })
-      .from(billingAccounts)
-      .where(eq(billingAccounts.patientId, dto.patientId))
-      .limit(1);
-
-    if (!billingAccount) throw new NotFoundException('Cuenta de paciente no encontrada');
+    // Auto-create billing account if the patient doesn't have one yet
+    await this.db
+      .insert(billingAccounts)
+      .values({ patientId: dto.patientId })
+      .onConflictDoNothing();
 
     const [appointment] = await this.db
       .insert(appointments)

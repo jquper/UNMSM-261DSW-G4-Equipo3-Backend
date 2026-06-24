@@ -57,13 +57,17 @@ export class BillingService {
   }
 
   async createTransaction(dto: CreateTransactionDto, createdBy: string) {
+    // Auto-create billing account if the patient doesn't have one yet
+    await this.db
+      .insert(billingAccounts)
+      .values({ patientId: dto.patientId })
+      .onConflictDoNothing();
+
     const [account] = await this.db
       .select({ id: billingAccounts.id })
       .from(billingAccounts)
       .where(eq(billingAccounts.patientId, dto.patientId))
       .limit(1);
-
-    if (!account) throw new NotFoundException('Cuenta de paciente no encontrada');
 
     const [transaction] = await this.db
       .insert(billingTransactions)

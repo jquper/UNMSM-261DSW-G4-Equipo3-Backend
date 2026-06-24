@@ -261,6 +261,12 @@ async function seed() {
   const insertedPatients = await db.insert(schema.patients).values(patientsData).returning();
   console.log(`✅ ${insertedPatients.length} pacientes creados`);
 
+  // Create billing accounts for all seeded patients
+  await db.insert(schema.billingAccounts).values(
+    insertedPatients.map((p) => ({ patientId: p.id })),
+  );
+  console.log(`✅ ${insertedPatients.length} cuentas de facturación creadas`);
+
   // ─── Series de comprobantes ────────────────────────────────────────────────
 
   await db.insert(schema.receiptSeries).values([
