@@ -88,6 +88,37 @@ export const transactionStatusEnum = pgEnum('transaction_status', [
   'refunded',
 ]);
 
+export const doctorAvailabilityEnum = pgEnum('doctor_availability', [
+  'available',
+  'busy',
+  'off_duty',
+]);
+
+export const receiptTypeEnum = pgEnum('receipt_type', ['boleta', 'factura']);
+
+export const paymentMethodEnum = pgEnum('payment_method', [
+  'cash',
+  'card',
+  'electronic_wallet',
+  'transfer',
+]);
+
+export const cashRegisterStatusEnum = pgEnum('cash_register_status', ['open', 'closed']);
+
+export const transactionConceptEnum = pgEnum('transaction_concept', [
+  'emergencia',
+  'cita',
+  'medicina',
+  'otro',
+]);
+
+export const medicationOrderStatusEnum = pgEnum('medication_order_status', [
+  'pending',
+  'ready',
+  'delivered',
+  'cancelled',
+]);
+
 // ─── Users ─────────────────────────────────────────────────────────────────────
 
 export const users = pgTable(
@@ -99,6 +130,7 @@ export const users = pgTable(
     firstName: varchar('first_name', { length: 100 }).notNull(),
     lastName: varchar('last_name', { length: 100 }).notNull(),
     role: userRoleEnum('role').notNull().default('receptionist'),
+    avatarUrl: varchar('avatar_url', { length: 500 }),
     isActive: boolean('is_active').notNull().default(true),
     lastLoginAt: timestamp('last_login_at'),
     createdAt: timestamp('created_at').defaultNow().notNull(),
@@ -161,6 +193,8 @@ export const doctors = pgTable(
     cmp: varchar('cmp', { length: 20 }).notNull().unique(),
     consultationFee: decimal('consultation_fee', { precision: 10, scale: 2 }).notNull().default('0'),
     schedule: jsonb('schedule'),
+    isAvailable: boolean('is_available').notNull().default(true),
+    availabilityStatus: doctorAvailabilityEnum('availability_status').notNull().default('available'),
     isActive: boolean('is_active').notNull().default(true),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
@@ -168,6 +202,7 @@ export const doctors = pgTable(
   (t) => ({
     cmpIdx: uniqueIndex('doctors_cmp_idx').on(t.cmp),
     specialtyIdx: index('doctors_specialty_idx').on(t.specialtyId),
+    availabilityIdx: index('doctors_availability_idx').on(t.availabilityStatus),
   }),
 );
 
@@ -414,13 +449,22 @@ export const billingTransactions = pgTable(
       .notNull()
       .references(() => patients.id),
     type: transactionTypeEnum('type').notNull(),
+    concept: transactionConceptEnum('concept').notNull().default('otro'),
     amount: decimal('amount', { precision: 12, scale: 2 }).notNull(),
     description: text('description').notNull(),
     referenceType: varchar('reference_type', { length: 50 }),
     referenceId: uuid('reference_id'),
     status: transactionStatusEnum('status').notNull().default('pending'),
-    paidAt: timestamp('paid_at'),
+    paymentMethod: paymentMethodEnum('payment_method'),
+    receiptType: receiptTypeEnum('receipt_type'),
     receiptNumber: varchar('receipt_number', { length: 50 }),
+    cashRegisterId: uuid('cash_register_id'),
+    amountPaid: decimal('amount_paid', { precision: 12, scale: 2 }),
+    change: decimal('change', { precision: 12, scale: 2 }),
+    paidAt: timestamp('paid_at'),
+    cancelledAt: timestamp('cancelled_at'),
+    cancellationReason: text('cancellation_reason'),
+    cancelledBy: uuid('cancelled_by').references(() => users.id),
     createdBy: uuid('created_by')
       .notNull()
       .references(() => users.id),
@@ -431,14 +475,121 @@ export const billingTransactions = pgTable(
     accountIdx: index('billing_transactions_account_idx').on(t.accountId),
     patientIdx: index('billing_transactions_patient_idx').on(t.patientId),
     statusIdx: index('billing_transactions_status_idx').on(t.status),
+    conceptIdx: index('billing_transactions_concept_idx').on(t.concept),
   }),
 );
+
+// ─── Receipt Series ────────────────────────────────────────────────────────────
+
+export const receiptSeries = pgTable('receipt_series', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  type: receiptTypeEnum('type').notNull(),
+  prefix: varchar('prefix', { length: 10 }).notNull(),
+  currentNumber: integer('current_number').notNull().default(0),
+  isActive: boolean('is_active').notNull().default(true),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  updatedAt: timestamp('updated_at').defaultNow().notNull(),
+});
+
+// ─── Cash Registers ────────────────────────────────────────────────────────────
+
+export const cashRegisters = pgTable(
+  'cash_registers',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: varchar('name', { length: 100 }).notNull(),
+    assignedUserId: uuid('assigned_user_id')
+      .notNull()
+      .references(() => users.id),
+    status: cashRegisterStatusEnum('status').notNull().default('open'),
+    openingBalance: decimal('opening_balance', { precision: 12, scale: 2 }).notNull().default('0'),
+    closingBalance: decimal('closing_balance', { precision: 12, scale: 2 }),
+    expectedBalance: decimal('expected_balance', { precision: 12, scale: 2 }),
+    openedAt: timestamp('opened_at').defaultNow().notNull(),
+    closedAt: timestamp('closed_at'),
+    notes: text('notes'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    statusIdx: index('cash_registers_status_idx').on(t.status),
+    userIdx: index('cash_registers_user_idx').on(t.assignedUserId),
+  }),
+);
+
+// ─── Pharmacy Inventory ────────────────────────────────────────────────────────
+
+export const pharmacyInventory = pgTable(
+  'pharmacy_inventory',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    medicationName: varchar('medication_name', { length: 255 }).notNull(),
+    genericName: varchar('generic_name', { length: 255 }),
+    presentation: varchar('presentation', { length: 100 }),
+    concentration: varchar('concentration', { length: 100 }),
+    laboratoryName: varchar('laboratory_name', { length: 255 }),
+    stock: integer('stock').notNull().default(0),
+    minStock: integer('min_stock').notNull().default(5),
+    unitPrice: decimal('unit_price', { precision: 10, scale: 2 }).notNull(),
+    expirationDate: date('expiration_date'),
+    lotNumber: varchar('lot_number', { length: 50 }),
+    location: varchar('location', { length: 100 }),
+    isActive: boolean('is_active').notNull().default(true),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    nameIdx: index('pharmacy_inventory_name_idx').on(t.medicationName),
+    stockIdx: index('pharmacy_inventory_stock_idx').on(t.stock),
+  }),
+);
+
+// ─── Medication Orders ─────────────────────────────────────────────────────────
+
+export const medicationOrders = pgTable(
+  'medication_orders',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    prescriptionId: uuid('prescription_id')
+      .notNull()
+      .references(() => prescriptions.id),
+    patientId: uuid('patient_id')
+      .notNull()
+      .references(() => patients.id),
+    dispensedBy: uuid('dispensed_by').references(() => users.id),
+    status: medicationOrderStatusEnum('status').notNull().default('pending'),
+    notes: text('notes'),
+    totalAmount: decimal('total_amount', { precision: 10, scale: 2 }).notNull().default('0'),
+    dispensedAt: timestamp('dispensed_at'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (t) => ({
+    prescriptionIdx: index('medication_orders_prescription_idx').on(t.prescriptionId),
+    patientIdx: index('medication_orders_patient_idx').on(t.patientId),
+    statusIdx: index('medication_orders_status_idx').on(t.status),
+  }),
+);
+
+export const medicationOrderItems = pgTable('medication_order_items', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  orderId: uuid('order_id')
+    .notNull()
+    .references(() => medicationOrders.id, { onDelete: 'cascade' }),
+  inventoryId: uuid('inventory_id').references(() => pharmacyInventory.id),
+  medicationName: varchar('medication_name', { length: 255 }).notNull(),
+  requestedQuantity: integer('requested_quantity').notNull(),
+  dispensedQuantity: integer('dispensed_quantity').notNull().default(0),
+  unitPrice: decimal('unit_price', { precision: 10, scale: 2 }).notNull(),
+  totalPrice: decimal('total_price', { precision: 10, scale: 2 }).notNull(),
+});
 
 // ─── Relations ─────────────────────────────────────────────────────────────────
 
 export const usersRelations = relations(users, ({ many, one }) => ({
   sessions: many(sessions),
   doctor: one(doctors, { fields: [users.id], references: [doctors.userId] }),
+  cashRegisters: many(cashRegisters),
 }));
 
 export const sessionsRelations = relations(sessions, ({ one }) => ({
@@ -465,6 +616,7 @@ export const patientsRelations = relations(patients, ({ many, one }) => ({
   emergencies: many(emergencies),
   medicalRecords: many(medicalRecords),
   prescriptions: many(prescriptions),
+  medicationOrders: many(medicationOrders),
   billingAccount: one(billingAccounts, { fields: [patients.id], references: [billingAccounts.patientId] }),
 }));
 
@@ -503,6 +655,7 @@ export const prescriptionsRelations = relations(prescriptions, ({ one, many }) =
   patient: one(patients, { fields: [prescriptions.patientId], references: [patients.id] }),
   doctor: one(doctors, { fields: [prescriptions.doctorId], references: [doctors.id] }),
   items: many(prescriptionItems),
+  medicationOrders: many(medicationOrders),
 }));
 
 export const prescriptionItemsRelations = relations(prescriptionItems, ({ one }) => ({
@@ -518,4 +671,27 @@ export const billingTransactionsRelations = relations(billingTransactions, ({ on
   account: one(billingAccounts, { fields: [billingTransactions.accountId], references: [billingAccounts.id] }),
   patient: one(patients, { fields: [billingTransactions.patientId], references: [patients.id] }),
   createdByUser: one(users, { fields: [billingTransactions.createdBy], references: [users.id] }),
+  cancelledByUser: one(users, { fields: [billingTransactions.cancelledBy], references: [users.id] }),
+}));
+
+export const receiptSeriesRelations = relations(receiptSeries, ({ }) => ({}));
+
+export const cashRegistersRelations = relations(cashRegisters, ({ one }) => ({
+  assignedUser: one(users, { fields: [cashRegisters.assignedUserId], references: [users.id] }),
+}));
+
+export const pharmacyInventoryRelations = relations(pharmacyInventory, ({ many }) => ({
+  orderItems: many(medicationOrderItems),
+}));
+
+export const medicationOrdersRelations = relations(medicationOrders, ({ one, many }) => ({
+  prescription: one(prescriptions, { fields: [medicationOrders.prescriptionId], references: [prescriptions.id] }),
+  patient: one(patients, { fields: [medicationOrders.patientId], references: [patients.id] }),
+  dispensedByUser: one(users, { fields: [medicationOrders.dispensedBy], references: [users.id] }),
+  items: many(medicationOrderItems),
+}));
+
+export const medicationOrderItemsRelations = relations(medicationOrderItems, ({ one }) => ({
+  order: one(medicationOrders, { fields: [medicationOrderItems.orderId], references: [medicationOrders.id] }),
+  inventory: one(pharmacyInventory, { fields: [medicationOrderItems.inventoryId], references: [pharmacyInventory.id] }),
 }));

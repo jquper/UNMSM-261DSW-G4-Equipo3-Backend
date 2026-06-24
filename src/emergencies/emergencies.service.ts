@@ -1,14 +1,23 @@
 import { Injectable, NotFoundException, Inject } from '@nestjs/common';
-import { eq, desc, and, count, gte, type SQL } from 'drizzle-orm';
+import { eq, desc, and, count, gte, sql, type SQL } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DATABASE_TOKEN } from '../database/database.module';
-import { emergencies, patients, doctors, users, tickets } from '../database/schema';
+import {
+  emergencies,
+  patients,
+  tickets,
+  billingAccounts,
+  billingTransactions,
+} from '../database/schema';
 import * as schema from '../database/schema';
 import { CreateEmergencyDto, UpdateEmergencyDto } from './dto/emergency.dto';
 
 const TRIAGE_PRIORITY: Record<number, string> = {
   1: 'immediate', 2: 'very_urgent', 3: 'urgent', 4: 'normal', 5: 'non_urgent',
 };
+
+// Standard emergency attendance fee
+const EMERGENCY_FEE = '80.00';
 
 @Injectable()
 export class EmergenciesService {
@@ -34,7 +43,13 @@ export class EmergenciesService {
           bed: emergencies.bed,
           arrivalTime: emergencies.arrivalTime,
           dischargeTime: emergencies.dischargeTime,
-          patient: { id: patients.id, firstName: patients.firstName, lastName: patients.lastName, birthDate: patients.birthDate, bloodType: patients.bloodType },
+          patient: {
+            id: patients.id,
+            firstName: patients.firstName,
+            lastName: patients.lastName,
+            birthDate: patients.birthDate,
+            bloodType: patients.bloodType,
+          },
         })
         .from(emergencies)
         .innerJoin(patients, eq(emergencies.patientId, patients.id))
@@ -98,6 +113,9 @@ export class EmergenciesService {
       })
       .returning();
 
+    // Auto-create billing debt for the emergency attendance
+    await this.createEmergencyDebt(dto.patientId, emergency.id, createdBy);
+
     return emergency;
   }
 
@@ -127,5 +145,51 @@ export class EmergenciesService {
         gte(emergencies.arrivalTime, new Date(new Date().setHours(0, 0, 0, 0))),
       ));
     return { active: Number(result?.total ?? 0) };
+  }
+
+  private async createEmergencyDebt(patientId: string, emergencyId: string, createdBy: string) {
+    const [account] = await this.db
+      .select({ id: billingAccounts.id })
+      .from(billingAccounts)
+      .where(eq(billingAccounts.patientId, patientId))
+      .limit(1);
+
+    if (!account) return; // No billing account — patient may not have one yet
+
+    await this.db.insert(billingTransactions).values({
+      accountId: account.id,
+      patientId,
+      type: 'charge',
+      concept: 'emergencia',
+      amount: EMERGENCY_FEE,
+      description: 'Atención de emergencia',
+      referenceType: 'emergency',
+      referenceId: emergencyId,
+      status: 'pending',
+      createdBy,
+    });
+
+    // Recalculate balance
+    const [result] = await this.db
+      .select({
+        totalCharged: sql<string>`COALESCE(SUM(CASE WHEN type = 'charge' AND status != 'cancelled' THEN CAST(amount AS DECIMAL) ELSE 0 END), 0)`,
+        totalPaid: sql<string>`COALESCE(SUM(CASE WHEN type IN ('payment', 'refund') AND status = 'paid' THEN CAST(amount AS DECIMAL) ELSE 0 END), 0)`,
+      })
+      .from(billingTransactions)
+      .where(eq(billingTransactions.patientId, patientId));
+
+    const charged = parseFloat(result?.totalCharged ?? '0');
+    const paid = parseFloat(result?.totalPaid ?? '0');
+    const balance = Math.max(0, charged - paid);
+
+    await this.db
+      .update(billingAccounts)
+      .set({
+        balance: String(balance),
+        totalCharged: String(charged),
+        totalPaid: String(paid),
+        updatedAt: new Date(),
+      })
+      .where(eq(billingAccounts.patientId, patientId));
   }
 }

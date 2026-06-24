@@ -4,7 +4,12 @@ import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DATABASE_TOKEN } from '../database/database.module';
 import { billingAccounts, billingTransactions, patients } from '../database/schema';
 import * as schema from '../database/schema';
-import { CreateTransactionDto, PayTransactionDto, PayAllDto } from './dto/billing.dto';
+import {
+  CreateTransactionDto,
+  PayTransactionDto,
+  PayAllDto,
+  CancelTransactionDto,
+} from './dto/billing.dto';
 
 @Injectable()
 export class BillingService {
@@ -23,10 +28,17 @@ export class BillingService {
     return account;
   }
 
-  async getTransactions(patientId: string, page = 1, limit = 20, status?: string) {
+  async getTransactions(
+    patientId: string,
+    page = 1,
+    limit = 20,
+    status?: string,
+    concept?: string,
+  ) {
     const offset = (page - 1) * limit;
-    const conditions = [eq(billingTransactions.patientId, patientId)];
+    const conditions: any[] = [eq(billingTransactions.patientId, patientId)];
     if (status) conditions.push(eq(billingTransactions.status, status as any));
+    if (concept) conditions.push(eq(billingTransactions.concept, concept as any));
 
     const where = and(...conditions);
 
@@ -59,6 +71,7 @@ export class BillingService {
         accountId: account.id,
         patientId: dto.patientId,
         type: dto.type as any,
+        concept: (dto.concept as any) ?? 'otro',
         amount: dto.amount,
         description: dto.description,
         referenceType: dto.referenceType,
@@ -72,7 +85,7 @@ export class BillingService {
     return transaction;
   }
 
-  async payTransaction(id: string, dto: PayTransactionDto) {
+  async payTransaction(id: string, dto: PayTransactionDto, cashierId?: string) {
     const [transaction] = await this.db
       .select()
       .from(billingTransactions)
@@ -80,10 +93,29 @@ export class BillingService {
       .limit(1);
 
     if (!transaction) throw new NotFoundException('Transacción no encontrada');
+    if (transaction.status !== 'pending') {
+      throw new BadRequestException(`La transacción no está pendiente (estado: ${transaction.status})`);
+    }
+
+    const year = new Date().getFullYear();
+    const receiptNumber =
+      dto.receiptNumber || `REC-${year}-${Date.now().toString().slice(-6)}`;
+
+    const amountPaid = dto.amountPaid ? parseFloat(dto.amountPaid) : parseFloat(transaction.amount);
+    const change = amountPaid - parseFloat(transaction.amount);
 
     const [updated] = await this.db
       .update(billingTransactions)
-      .set({ status: 'paid', paidAt: new Date(), receiptNumber: dto.receiptNumber, updatedAt: new Date() })
+      .set({
+        status: 'paid',
+        paidAt: new Date(),
+        receiptNumber,
+        paymentMethod: dto.paymentMethod as any,
+        receiptType: dto.receiptType as any,
+        amountPaid: amountPaid.toFixed(2),
+        change: change >= 0 ? change.toFixed(2) : '0',
+        updatedAt: new Date(),
+      })
       .where(eq(billingTransactions.id, id))
       .returning();
 
@@ -91,7 +123,7 @@ export class BillingService {
     return updated;
   }
 
-  async payAll(patientId: string, dto: PayAllDto) {
+  async payAll(patientId: string, dto: PayAllDto, cashierId?: string) {
     const pending = await this.db
       .select()
       .from(billingTransactions)
@@ -109,10 +141,22 @@ export class BillingService {
     const year = new Date().getFullYear();
     const receiptNumber = dto.receiptNumber || `REC-${year}-${Date.now().toString().slice(-6)}`;
     const now = new Date();
+    const totalAmount = pending.reduce((s, t) => s + parseFloat(t.amount), 0);
+    const amountPaid = dto.amountPaid ? parseFloat(dto.amountPaid) : totalAmount;
+    const change = amountPaid - totalAmount;
 
     await this.db
       .update(billingTransactions)
-      .set({ status: 'paid', paidAt: now, receiptNumber, updatedAt: now })
+      .set({
+        status: 'paid',
+        paidAt: now,
+        receiptNumber,
+        paymentMethod: dto.paymentMethod as any,
+        receiptType: dto.receiptType as any,
+        amountPaid: amountPaid.toFixed(2),
+        change: change >= 0 ? change.toFixed(2) : '0',
+        updatedAt: now,
+      })
       .where(
         and(
           eq(billingTransactions.patientId, patientId),
@@ -122,6 +166,34 @@ export class BillingService {
 
     await this.recalculateBalance(patientId);
     return this.getReceipt(receiptNumber);
+  }
+
+  async cancelTransaction(id: string, dto: CancelTransactionDto, cancelledBy: string) {
+    const [transaction] = await this.db
+      .select()
+      .from(billingTransactions)
+      .where(eq(billingTransactions.id, id))
+      .limit(1);
+
+    if (!transaction) throw new NotFoundException('Transacción no encontrada');
+    if (transaction.status === 'cancelled') {
+      throw new BadRequestException('La transacción ya está anulada');
+    }
+
+    const [cancelled] = await this.db
+      .update(billingTransactions)
+      .set({
+        status: 'cancelled',
+        cancelledAt: new Date(),
+        cancellationReason: dto.reason,
+        cancelledBy,
+        updatedAt: new Date(),
+      })
+      .where(eq(billingTransactions.id, id))
+      .returning();
+
+    await this.recalculateBalance(transaction.patientId);
+    return cancelled;
   }
 
   async getReceipt(receiptNumber: string) {
@@ -145,9 +217,13 @@ export class BillingService {
     const total = rows.reduce((sum, r) => sum + parseFloat(r.transaction.amount), 0);
     return {
       receiptNumber,
+      receiptType: rows[0].transaction.receiptType,
+      paymentMethod: rows[0].transaction.paymentMethod,
       patient: rows[0].patient,
       items: rows.map((r) => r.transaction),
       total: total.toFixed(2),
+      amountPaid: rows[0].transaction.amountPaid,
+      change: rows[0].transaction.change,
       paidAt: rows[0].transaction.paidAt,
     };
   }
@@ -157,7 +233,13 @@ export class BillingService {
     return this.db
       .select({
         account: billingAccounts,
-        patient: { id: patients.id, firstName: patients.firstName, lastName: patients.lastName, documentNumber: patients.documentNumber, phone: patients.phone },
+        patient: {
+          id: patients.id,
+          firstName: patients.firstName,
+          lastName: patients.lastName,
+          documentNumber: patients.documentNumber,
+          phone: patients.phone,
+        },
       })
       .from(billingAccounts)
       .innerJoin(patients, eq(billingAccounts.patientId, patients.id))

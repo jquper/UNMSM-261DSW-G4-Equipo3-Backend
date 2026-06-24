@@ -1,10 +1,10 @@
 import { Injectable, ConflictException, NotFoundException, Inject } from '@nestjs/common';
-import { eq, desc, and } from 'drizzle-orm';
+import { eq, and } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { DATABASE_TOKEN } from '../database/database.module';
 import { doctors, users, specialties } from '../database/schema';
 import * as schema from '../database/schema';
-import { CreateDoctorDto, UpdateDoctorDto } from './dto/doctor.dto';
+import { CreateDoctorDto, UpdateDoctorDto, UpdateAvailabilityDto } from './dto/doctor.dto';
 
 @Injectable()
 export class DoctorsService {
@@ -12,9 +12,11 @@ export class DoctorsService {
     @Inject(DATABASE_TOKEN) private readonly db: NodePgDatabase<typeof schema>,
   ) {}
 
-  async findAll(specialtyId?: string) {
-    const conditions = [eq(doctors.isActive, true)];
+  async findAll(specialtyId?: string, availabilityStatus?: string, isAvailable?: boolean) {
+    const conditions: any[] = [eq(doctors.isActive, true)];
     if (specialtyId) conditions.push(eq(doctors.specialtyId, specialtyId));
+    if (availabilityStatus) conditions.push(eq(doctors.availabilityStatus, availabilityStatus as any));
+    if (isAvailable !== undefined) conditions.push(eq(doctors.isAvailable, isAvailable));
 
     return this.db
       .select({
@@ -23,6 +25,8 @@ export class DoctorsService {
         consultationFee: doctors.consultationFee,
         schedule: doctors.schedule,
         isActive: doctors.isActive,
+        isAvailable: doctors.isAvailable,
+        availabilityStatus: doctors.availabilityStatus,
         user: {
           id: users.id,
           firstName: users.firstName,
@@ -50,6 +54,8 @@ export class DoctorsService {
         consultationFee: doctors.consultationFee,
         schedule: doctors.schedule,
         isActive: doctors.isActive,
+        isAvailable: doctors.isAvailable,
+        availabilityStatus: doctors.availabilityStatus,
         user: {
           id: users.id,
           firstName: users.firstName,
@@ -110,6 +116,27 @@ export class DoctorsService {
       .set({ ...dto, updatedAt: new Date() })
       .where(eq(doctors.id, id))
       .returning();
+    return updated;
+  }
+
+  async updateAvailability(id: string, dto: UpdateAvailabilityDto) {
+    await this.findOne(id);
+
+    const isAvailable =
+      dto.isAvailable !== undefined
+        ? dto.isAvailable
+        : dto.availabilityStatus === 'available';
+
+    const [updated] = await this.db
+      .update(doctors)
+      .set({
+        availabilityStatus: dto.availabilityStatus as any,
+        isAvailable,
+        updatedAt: new Date(),
+      })
+      .where(eq(doctors.id, id))
+      .returning();
+
     return updated;
   }
 }

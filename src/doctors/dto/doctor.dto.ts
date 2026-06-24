@@ -1,5 +1,11 @@
-import { IsString, IsUUID, IsOptional, IsDecimal, MaxLength, IsBoolean } from 'class-validator';
+import { IsString, IsUUID, IsOptional, IsDecimal, MaxLength, IsBoolean, IsEnum } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+
+export enum DoctorAvailability {
+  AVAILABLE = 'available',
+  BUSY = 'busy',
+  OFF_DUTY = 'off_duty',
+}
 
 export class CreateDoctorDto {
   @ApiProperty({ example: 'uuid-del-usuario', description: 'UUID del usuario asociado al médico' })
@@ -37,4 +43,14 @@ export class UpdateDoctorDto {
 
   @ApiPropertyOptional({ example: true })
   @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+export class UpdateAvailabilityDto {
+  @ApiProperty({ enum: DoctorAvailability, example: DoctorAvailability.BUSY, description: 'Nuevo estado de disponibilidad' })
+  @IsEnum(DoctorAvailability)
+  availabilityStatus: DoctorAvailability;
+
+  @ApiPropertyOptional({ example: false, description: 'Si el médico está disponible para nuevas citas' })
+  @IsOptional() @IsBoolean()
+  isAvailable?: boolean;
 }

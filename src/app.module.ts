@@ -14,6 +14,8 @@ import { EmergenciesModule } from './emergencies/emergencies.module';
 import { MedicalRecordsModule } from './medical-records/medical-records.module';
 import { PrescriptionsModule } from './prescriptions/prescriptions.module';
 import { BillingModule } from './billing/billing.module';
+import { PharmacyModule } from './pharmacy/pharmacy.module';
+import { CashRegisterModule } from './cash-register/cash-register.module';
 
 @Module({
   imports: [
@@ -37,6 +39,8 @@ import { BillingModule } from './billing/billing.module';
     MedicalRecordsModule,
     PrescriptionsModule,
     BillingModule,
+    PharmacyModule,
+    CashRegisterModule,
   ],
 })
-export class AppModule { }
+export class AppModule {}
