@@ -14,11 +14,10 @@ async function bootstrap() {
 
   const configService = app.get(ConfigService);
   const port = configService.get<number>("PORT", 3000);
-  const frontendUrl = configService.get<string>(
-    "http://localhost:5173",
-    "https://clinica-api.linker.pe",
-    "http://clinica-api.linker.pe",
-  );
+  const allowedOrigins = configService
+    .get<string>("CORS_ORIGINS", "http://localhost:5173")
+    .split(",")
+    .map((o) => o.trim());
 
   // Security headers (OWASP) — scriptSrc allows 'unsafe-inline' for Swagger UI
   app.use(
@@ -39,7 +38,7 @@ async function bootstrap() {
 
   // CORS
   app.enableCors({
-    origin: frontendUrl,
+    origin: allowedOrigins,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
